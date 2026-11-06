@@ -29,6 +29,11 @@ class Dimension:
 
     name: str
 
+    #: Whether two neighbouring slices can be sent as one filter (a wider range).
+    #: uncapped uses this to merge small windows. ``False`` for single-value
+    #: :class:`Values`, where the source only accepts one value at a time.
+    mergeable: bool = True
+
     def __len__(self) -> int:  # pragma: no cover - abstract
         raise NotImplementedError
 
@@ -169,6 +174,7 @@ class Values(Dimension):
         self.name = name
         self.values: Sequence[Hashable] = tuple(values)
         self.multi = multi
+        self.mergeable = multi
         if not self.values:
             raise ValueError(f"{name}: values is empty")
         if len(set(self.values)) != len(self.values):

@@ -13,11 +13,13 @@ async def collect(r):
     return [w async for w in r]
 
 
-def test_async_matches_sync():
+@pytest.mark.parametrize("merge", [True, False])
+def test_async_matches_sync(merge):
     items = make_items(10_000, skew=True)
-    sync = list(split(FakeSearch(items, [PRICE, LISTED]).count, cap=700, dims=[PRICE, LISTED]))
+    search = FakeSearch(items, [PRICE, LISTED])
+    sync = list(split(search.count, cap=700, dims=[PRICE, LISTED], merge=merge))
     s = FakeSearch(items, [PRICE, LISTED])
-    r = asplit(s.acount, cap=700, dims=[PRICE, LISTED])
+    r = asplit(s.acount, cap=700, dims=[PRICE, LISTED], merge=merge)
     windows = asyncio.run(collect(r))
     assert windows == sync
     assert_partition(s, windows, cap=700)

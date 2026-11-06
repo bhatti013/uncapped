@@ -59,7 +59,8 @@ class Window:
         complete: ``False`` when ``count`` is still over the cap because every
             dimension is down to a single point. Only ``cap`` results of such a
             window can be fetched.
-        depth: How many splits it took to get here.
+        depth: How many splits it took to get here (for a merged window, the
+            deepest of its parts).
     """
 
     filters: Filters
@@ -112,7 +113,11 @@ class _Plan:
     max_fanout: int
     cache: Optional[MutableMapping[str, int]]
     on_capped: str
+    merge: bool
     stats: Stats = field(default_factory=Stats)
+    # The newest window, held back so the next one can be merged into it:
+    # (states, window, stats.unaccounted when it was held).
+    _held: Optional[Tuple[_States, Window, int]] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.cap, int) or self.cap < 1:
@@ -129,6 +134,8 @@ class _Plan:
             raise ValueError(f"max_fanout must be >= 2, got {self.max_fanout!r}")
         if self.on_capped not in ("warn", "raise", "ignore"):
             raise ValueError(f'on_capped must be "warn", "raise" or "ignore", got {self.on_capped!r}')
+        if not isinstance(self.merge, bool):
+            raise ValueError(f"merge must be True or False, got {self.merge!r}")
 
     # -- building filters -------------------------------------------------
 
@@ -194,6 +201,58 @@ class _Plan:
         s.max_depth = max(s.max_depth, depth)
         return window
 
+    # -- merging ----------------------------------------------------------
+    #
+    # Splitting a window that sits next to a dense spot leaves many tiny
+    # neighbours (1, 3, 2... results), and each one costs at least one page
+    # request to fetch. Neighbours that together still fit under the cap are
+    # sent as one wider window instead.
+    #
+    # Two windows are merged only when they differ in nothing but their last
+    # split dimension, and the merged count is exact: windows come out in
+    # order, so everything between the two (in that dimension) was counted as
+    # empty. The one exception is results no dimension could reach (items with
+    # no value for a filter): they sit inside such a gap and a wider window
+    # would include them. If any were found since the held window, it is not
+    # merged.
+
+    def hold(self, states: _States, window: Window) -> Optional[Window]:
+        """Take a new window; return the previous one if it can no longer grow."""
+        held = self._held
+        if held is not None:
+            merged = self._merged(held, states, window)
+            if merged is not None:
+                self._held = merged
+                self.stats.windows -= 1
+                return None
+        self._held = (states, window, self.stats.unaccounted)
+        return held[1] if held is not None else None
+
+    def release(self) -> Optional[Window]:
+        """The last window, at the end of a run."""
+        held, self._held = self._held, None
+        return held[1] if held is not None else None
+
+    def _merged(
+        self, held: Tuple[_States, Window, int], states: _States, window: Window
+    ) -> Optional[Tuple[_States, Window, int]]:
+        prev_states, prev, unaccounted = held
+        if not (self.merge and prev.complete and window.complete):
+            return None
+        if prev.count + window.count > self.cap or self.stats.unaccounted != unaccounted:
+            return None
+        if not states or prev_states.keys() != states.keys():
+            return None
+        last = next(d for d in reversed(self.dims) if d.name in states)
+        if not last.mergeable:
+            return None
+        if any(prev_states[name] != states[name] for name in states if name != last.name):
+            return None
+        span = {**states, last.name: (prev_states[last.name][0], states[last.name][1])}
+        count = prev.count + window.count
+        merged = Window(self.render(span), count, True, max(prev.depth, window.depth))
+        return span, merged, unaccounted
+
     def finish(self) -> None:
         s = self.stats
         if self.on_capped == "warn" and s.capped_windows:
@@ -230,6 +289,7 @@ class Split(_Plan):
 
     def __iter__(self) -> Iterator[Window]:
         self.stats = Stats()
+        self._held = None
         root: _States = {}
         total = self._count(root)
         self.stats.total = total
@@ -240,11 +300,16 @@ class Split(_Plan):
                 continue
             kids = None if n <= self.cap else self.children(states, n)
             if kids is None:
-                yield self.emit(states, n, depth)
+                done = self.hold(states, self.emit(states, n, depth))
+                if done is not None:
+                    yield done
                 continue
             counts = [self._count(kid) for kid in kids]
             self.account(n, counts)
             stack.extend((kid, c, depth + 1) for kid, c in reversed(list(zip(kids, counts))))
+        done = self.release()
+        if done is not None:
+            yield done
         self.finish()
 
 
@@ -274,6 +339,7 @@ class AsyncSplit(_Plan):
 
     async def _run(self) -> AsyncIterator[Window]:
         self.stats = Stats()
+        self._held = None
         gate = asyncio.Semaphore(self.concurrency)
         root: _States = {}
         total = await self._count(root, gate)
@@ -285,11 +351,16 @@ class AsyncSplit(_Plan):
                 continue
             kids = None if n <= self.cap else self.children(states, n)
             if kids is None:
-                yield self.emit(states, n, depth)
+                done = self.hold(states, self.emit(states, n, depth))
+                if done is not None:
+                    yield done
                 continue
             counts = await asyncio.gather(*(self._count(kid, gate) for kid in kids))
             self.account(n, counts)
             stack.extend((kid, c, depth + 1) for kid, c in reversed(list(zip(kids, counts))))
+        done = self.release()
+        if done is not None:
+            yield done
         self.finish()
 
 
@@ -302,6 +373,7 @@ def split(
     max_fanout: int = 16,
     cache: Optional[MutableMapping[str, int]] = None,
     on_capped: str = "warn",
+    merge: bool = True,
 ) -> Split:
     """Cut a search into windows that each return at most ``cap`` results.
 
@@ -323,6 +395,10 @@ def split(
             narrowed: ``"warn"`` (default; it is yielded with
             ``complete=False``), ``"raise"`` :class:`CapExceeded`, or
             ``"ignore"``.
+        merge: Merge neighbouring windows that together still fit under the
+            cap (default ``True``), so fetching them takes fewer requests. Each
+            window then comes out one step later. ``False`` keeps every window
+            as it was split.
 
     Returns:
         A :class:`Split`. Iterate it for :class:`Window` objects in dimension
@@ -336,6 +412,7 @@ def split(
         max_fanout=max_fanout,
         cache=cache,
         on_capped=on_capped,
+        merge=merge,
     )
 
 
@@ -348,6 +425,7 @@ def asplit(
     max_fanout: int = 16,
     cache: Optional[MutableMapping[str, int]] = None,
     on_capped: str = "warn",
+    merge: bool = True,
     concurrency: int = 4,
 ) -> AsyncSplit:
     """Async :func:`split`. ``count`` may be async; sibling counts run concurrently.
@@ -363,5 +441,6 @@ def asplit(
         max_fanout=max_fanout,
         cache=cache,
         on_capped=on_capped,
+        merge=merge,
         concurrency=concurrency,
     )

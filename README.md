@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/uncapped)](https://pypi.org/project/uncapped/)
 [![Python](https://img.shields.io/pypi/pyversions/uncapped)](https://pypi.org/project/uncapped/)
 [![CI](https://github.com/bhatti013/uncapped/actions/workflows/ci.yml/badge.svg)](https://github.com/bhatti013/uncapped/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/bhatti013/uncapped/blob/main/LICENSE)
 
 **Get every result from searches that stop at 1,000.**
 
@@ -37,7 +37,7 @@ pip install uncapped
 
 ## Example: every Rust repo with more than 1,000 stars
 
-GitHub's search finds 2,476 of them but will only ever return 1,000. You
+GitHub's search finds 2,478 of them but will only ever return 1,000. You
 tell uncapped how to **count** results for a set of filters; it gives you back
 windows that each fit under the cap.
 
@@ -71,19 +71,18 @@ Real output (November 2026):
 
 ```
 created                     repos
-2008-01-01 .. 2012-09-17       13
-2012-09-18 .. 2017-06-04      406
+2008-01-01 .. 2017-06-04      419
 2017-06-05 .. 2022-02-19      984
 2022-02-20 .. 2024-06-29      513
-2024-06-30 .. 2026-11-06      560
+2024-06-30 .. 2026-11-06      562
 
-2,476 repos match. Without uncapped you'd get 1,000.
-5 windows, 2,476 fetchable (100%), 7 count requests.
+2,478 repos match. Without uncapped you'd get 1,000.
+4 windows, 2,478 fetchable (100%), 7 count requests.
 ```
 
-Paging through those 5 windows downloaded all 2,476 repos, with no duplicates.
+Paging through those 4 windows downloaded all 2,478 repos, with no duplicates.
 The runnable version, with rate-limit handling and download, is
-[`examples/github_repos.py`](examples/github_repos.py).
+[`examples/github_repos.py`](https://github.com/bhatti013/uncapped/blob/main/examples/github_repos.py).
 
 ## How it works
 
@@ -95,8 +94,13 @@ The runnable version, with rate-limit handling and download, is
    again. Empty parts are dropped.
 4. When a dimension is down to a single value (every listing in this window
    costs exactly 42) uncapped moves on to the next dimension.
-5. Windows come out in order, as soon as they're ready, so you can start
-   fetching before the plan is finished.
+5. Neighbouring windows that together still fit under the cap are merged into
+   one wider window, so you page through fewer of them. Around a dense spot
+   (2,500 listings at one price) this turns 27 windows into 6. Merged counts
+   stay exact: uncapped never merges across results it couldn't reach. Pass
+   `merge=False` to keep every window as it was split.
+6. Windows come out in order while the plan is still being worked out, so you
+   can start fetching before it's finished.
 
 ## Dimensions
 

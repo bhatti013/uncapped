@@ -133,6 +133,65 @@ def test_items_the_dimensions_cannot_reach_are_reported():
     assert r.stats.fetchable == 2_880
 
 
+def still_mergeable(windows, cap):
+    """Neighbours that differ only in their last filter and would still fit together."""
+    return [
+        (a.filters, b.filters)
+        for a, b in zip(windows, windows[1:])
+        if a.complete
+        and b.complete
+        and a.count + b.count <= cap
+        and a.filters
+        and a.filters.keys() == b.filters.keys()
+        and all(a.filters[k] == b.filters[k] for k in list(a.filters)[:-1])
+    ]
+
+
+def test_merging_removes_the_tiny_windows_around_a_spike():
+    items = make_items(4_000)
+    for it in items[1_500:]:
+        it["price"] = 42_000  # 2,500 listings at one price, like a new development
+    merged_search = FakeSearch(items, [PRICE, LISTED])
+    plain_search = FakeSearch(items, [PRICE, LISTED])
+    r, merged = run(merged_search, cap=1000, dims=[PRICE, LISTED])
+    _, plain = run(plain_search, cap=1000, dims=[PRICE, LISTED], merge=False)
+
+    assert_partition(merged_search, merged, cap=1000)  # merged counts are exact
+    assert_partition(plain_search, plain, cap=1000)
+    assert len(merged) <= len(plain) // 2
+    assert not still_mergeable(merged, cap=1000)
+    assert still_mergeable(plain, cap=1000)
+    assert len(merged_search.calls) == len(plain_search.calls)  # merging costs no counts
+    assert r.stats.windows == len(merged)
+    assert r.stats.fetchable == 4_000
+
+
+def test_never_merges_across_results_that_could_not_be_reached():
+    # 1,200 listings at one price have no listing date, so neither filter can
+    # reach them. The windows on either side are small enough to merge, but a
+    # window spanning both would also return those 1,200 and be over the cap.
+    items = make_items(1_800)
+    for it in items[:300]:
+        it["price"] = it["price"] % 30_000
+    for it in items[300:600]:
+        it["price"] = 70_000 + it["price"] % 30_000
+    for it in items[600:]:
+        it["price"], it["listed"] = 50_000, None
+    s = FakeSearch(items, [PRICE, LISTED])
+    with pytest.warns(UncappedWarning, match="1,200 result"):
+        r, windows = run(s, cap=1000, dims=[PRICE, LISTED])
+    assert_partition(s, windows, cap=1000, reachable=items[:600])
+    assert all(not (lo <= 50_000 <= hi) for lo, hi in (w.filters["price"] for w in windows))
+    assert r.stats.unaccounted == 1_200
+
+
+def test_single_values_are_never_merged():
+    types = Values("type", ["apartment", "villa", "townhouse", "office"])
+    s = FakeSearch(make_items(1_500), [types])
+    _, windows = run(s, cap=1000, dims=[types])  # each type alone is ~375: merging would fit
+    assert [w.filters["type"] for w in windows] == list(types.values)
+
+
 def test_cache_makes_a_rerun_free(tmp_path):
     s = FakeSearch(make_items(8_000), [PRICE, LISTED])
     with shelve.open(str(tmp_path / "counts")) as cache:
@@ -183,6 +242,7 @@ def test_count_must_return_an_int(bad):
         {"fanout": "fast"},
         {"max_fanout": 1},
         {"on_capped": "explode"},
+        {"merge": "yes"},
     ],
 )
 def test_invalid_settings(kw):
