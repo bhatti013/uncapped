@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Agent Skill in `skills/uncapped/`, which teaches coding agents when and how to use uncapped. It comes with tested recipes for GitHub, Elasticsearch, Algolia, and APIs without a total count.
+- `llms.txt`, a short summary of the API for AI tools.
+- `context7.json`, so Context7 indexes the docs and gives coding agents the usage rules.
+
 ## 0.1.0
 
 First release.

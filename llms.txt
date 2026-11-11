@@ -1,0 +1,66 @@
+# uncapped
+
+> Python library that gets every result from search APIs that cap how many results one query can return: GitHub search (1,000), Algolia (1,000), Elasticsearch and OpenSearch from/size (10,000), Google Places (60) and many listing sites. It splits the search into filter windows that each fit under the cap, and you page through each window with your own HTTP client.
+
+uncapped never makes requests itself. You give `split()` two things: a `count(filters) -> int` function, and the dimensions it may split on. It yields `Window` objects. You add each window's `filters` to your normal query and page through it.
+
+Key facts for writing code with uncapped:
+
+- **Install:** `pip install uncapped`. It needs Python 3.10+ and has no dependencies.
+- **`split(count, cap=1000, dims=[...])`** returns an iterable of `Window(filters, count, complete, depth)`. `asplit(...)` is the async version; iterate it with `async for`.
+- **Dimensions:**
+  - `Range(name, lo, hi, step=1)` gives an inclusive `(lo, hi)` tuple.
+  - `DateRange(name, start, end, step=...)` gives inclusive `(date, date)` or `(datetime, datetime)` tuples. `start` and `end` accept ISO strings, `"today"` and `"now"`.
+  - `Values(name, values)` gives one value at a time; `Values(..., multi=True)` gives a tuple.
+- **Missing dimensions:** a dimension missing from `filters` is unconstrained. Only add that filter to the query when its key is present.
+- **Exclusive max:** bounds are inclusive, so if the API's max parameter is exclusive, send `hi + step`.
+- **`step`:** use the smallest difference the source can tell apart, for example `timedelta(milliseconds=1)` for millisecond timestamps.
+- **Single-valued fields only:** split only on fields where every item has exactly one value (price, date, id, category), never on tags or keyword search.
+- **Stats and warnings:**
+  - `run.stats` reports `total`, `windows`, `fetchable`, `capped_windows`, `unaccounted` and `queries`.
+  - `UncappedWarning` is raised for windows still over the cap and for results no dimension could reach.
+  - `on_capped="raise"` raises `CapExceeded` instead of warning.
+- **Other options:**
+  - `cache=` takes any dict-like object (such as `shelve`) so a run can resume without counting again.
+  - `merge=True` (default) joins small neighbouring windows.
+  - `fanout="auto"` (default) sizes each split from how far over the cap a window is.
+
+Minimal example. GitHub reports 2,478 matches for this query; uncapped found 4 windows (419, 984, 513 and 562 repos):
+
+```python
+import requests
+from uncapped import split, DateRange
+
+URL = "https://api.github.com/search/repositories"
+QUERY = "language:rust stars:>1000"
+
+def count(filters):
+    q = QUERY
+    if "created" in filters:
+        lo, hi = filters["created"]
+        q += f" created:{lo}..{hi}"
+    r = requests.get(URL, params={"q": q})
+    return r.json()["total_count"]
+
+dates = DateRange("created", "2008-01-01", "today")
+
+for w in split(count, cap=1000, dims=[dates]):
+    lo, hi = w.filters["created"]
+    print(lo, "..", hi, w.count, "repos")
+```
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/bhatti013/uncapped/main/README.md): the full guide, including how splitting works, the dimensions, stats, async, caching, recipes and FAQ
+- [Agent Skill](https://raw.githubusercontent.com/bhatti013/uncapped/main/skills/uncapped/SKILL.md): step-by-step instructions for coding agents, from choosing dimensions to checking what was missed
+- [Recipes](https://raw.githubusercontent.com/bhatti013/uncapped/main/skills/uncapped/references/recipes.md): tested patterns for GitHub search, Elasticsearch/OpenSearch, Algolia, and APIs without a total count
+
+## API source
+
+- [core.py](https://raw.githubusercontent.com/bhatti013/uncapped/main/src/uncapped/core.py): `split`, `asplit`, `Window`, `Stats`, `UncappedWarning`, `CapExceeded`
+- [dims.py](https://raw.githubusercontent.com/bhatti013/uncapped/main/src/uncapped/dims.py): `Range`, `DateRange`, `Values`, `Dimension`
+
+## Optional
+
+- [GitHub example script](https://raw.githubusercontent.com/bhatti013/uncapped/main/examples/github_repos.py): handles rate limits and downloads every repo
+- [Changelog](https://raw.githubusercontent.com/bhatti013/uncapped/main/CHANGELOG.md)

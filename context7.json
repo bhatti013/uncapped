@@ -1,0 +1,17 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "uncapped",
+  "description": "Python library that gets every result from search APIs that cap how many results one query returns (GitHub search 1,000, Algolia 1,000, Elasticsearch from/size 10,000) by splitting the search into filter windows that each fit under the cap.",
+  "excludeFolders": ["tests", ".github"],
+  "excludeFiles": ["CHANGELOG.md", "LICENSE"],
+  "rules": [
+    "uncapped never makes requests: pass split() a count(filters) -> int function that returns the total number of results for those filters, then page through each Window's filters with your own client.",
+    "A dimension missing from the filters dict is unconstrained; only add that filter to the query when its key is present.",
+    "Range and DateRange bounds are inclusive. If the API's max parameter is exclusive, send hi + step.",
+    "Set step to the smallest difference the source can tell apart, such as timedelta(milliseconds=1) for millisecond timestamps.",
+    "Only split on fields where each item has exactly one value (number, date, id, category), never on tags or keyword search.",
+    "After iterating, check run.stats.capped_windows and run.stats.unaccounted, and do not silence UncappedWarning.",
+    "If the source reports that a count is only an estimate, return max(estimate, cap + 1) from count so uncapped splits further until counts are exact.",
+    "If the data changes during the run, pass a cap below the real limit, such as cap=950 for a 1,000 limit."
+  ]
+}

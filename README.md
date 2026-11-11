@@ -207,6 +207,24 @@ def count(filters):
     return session.get(SEARCH_URL, params=params).json()["meta"]["total"]
 ```
 
+## Using uncapped with AI coding assistants
+
+The repo includes an [Agent Skill](https://github.com/bhatti013/uncapped/blob/main/skills/uncapped/SKILL.md)
+that teaches coding agents to recognise a capped search API and use uncapped
+correctly. It works with Claude Code, Cursor, Codex, GitHub Copilot and the
+other tools that support [Agent Skills](https://agentskills.io).
+
+Install it with the skills CLI:
+
+```bash
+npx skills add bhatti013/uncapped
+```
+
+For Claude Code, you can instead copy `skills/uncapped/` into `~/.claude/skills/`.
+
+For AI tools that read docs on demand, [`llms.txt`](https://github.com/bhatti013/uncapped/blob/main/llms.txt)
+gives a short summary of the API, its rules and a working example.
+
 ## FAQ
 
 **Why not just ask for page 11?** The cap is enforced by the server. Past it
